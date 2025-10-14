@@ -9,7 +9,7 @@ database:
   # 数据库名称
   database: authme
   # 数据库用户名
-  username: authme
+  username: root
   # 数据库密码
   password: 'wcjs123'
   # 表名
@@ -24,8 +24,8 @@ smtp:
   # 邮箱用户名
   username: support@cnmsb.xin
   # 邮箱密码或授权码
-  password: 'qTHWV9pU4fR52rGf'
+  password: ''
   # 是否启用SSL
-  ssl: false
+  ssl: true
   # 是否启用TLS
-  tls: true
+  tls: false
