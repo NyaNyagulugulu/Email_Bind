@@ -43,12 +43,17 @@ public final class EmailBind extends JavaPlugin implements Listener {
     private Map<UUID, String> playerVerificationCodes = new HashMap<>();
     // 存储正在等待验证码输入的玩家
     private Map<UUID, Boolean> playerWaitingForCode = new HashMap<>();
+    // 存储玩家的提示任务
+    private Map<UUID, BukkitRunnable> playerReminderTasks = new HashMap<>();
     
     @Override
     public void onEnable() {
         // 保存默认配置
         saveDefaultConfig();
         loadConfig();
+        
+        // 释放默认文件
+        saveResource("bind.html", false);
         
         // 初始化数据库
         initializeDatabase();
@@ -64,7 +69,7 @@ public final class EmailBind extends JavaPlugin implements Listener {
                     checkPlayerEmail(player);
                 }
             }
-        }.runTaskTimer(this, 0L, 600L); // 每30秒检查一次
+        }.runTaskTimer(this, 0L, 100L); // 每5秒检查一次
         
         getLogger().info("EmailBind插件已启用!");
     }
@@ -105,7 +110,12 @@ public final class EmailBind extends JavaPlugin implements Listener {
     
     // 启动重复提示任务
     private void startReminderTask(Player player, UUID playerUUID) {
-        new BukkitRunnable() {
+        // 检查是否已经存在提示任务
+        if (playerReminderTasks.containsKey(playerUUID)) {
+            return;
+        }
+        
+        BukkitRunnable task = new BukkitRunnable() {
             // 颜色数组
             private final ChatColor[] colors = {
                 ChatColor.RED, ChatColor.YELLOW, ChatColor.GREEN, 
@@ -123,16 +133,31 @@ public final class EmailBind extends JavaPlugin implements Listener {
                     ChatColor currentColor = colors[colorIndex % colors.length];
                     colorIndex++;
                     
-                    // 发送三行实质性内容的二次元猫娘风格提示
+                    // 发送带横线的三行实质性内容的二次元猫娘风格提示
+                    player.sendMessage(currentColor + "§l----------------------------------------");
                     player.sendMessage(currentColor + "§l§o[猫娘提醒] §d★ 亲爱的主人，您的邮箱还没有绑定哦！ ★");
                     player.sendMessage(currentColor + "§l§o[猫娘提醒] §b★ 请在聊天框输入您的邮箱地址 ★");
                     player.sendMessage(currentColor + "§l§o[猫娘提醒] §a★ 我会为您发送验证码完成绑定喵～ ★");
+                    player.sendMessage(currentColor + "§l----------------------------------------");
                 } else {
                     // 玩家已离线或已绑定，取消任务
+                    playerReminderTasks.remove(playerUUID);
                     this.cancel();
                 }
             }
-        }.runTaskTimer(this, 0L, 10L); // 0.5秒间隔（10 ticks）
+        };
+        
+        task.runTaskTimer(this, 0L, 100L); // 5秒间隔（100 ticks）
+        playerReminderTasks.put(playerUUID, task);
+    }
+    
+    // 取消提示任务
+    private void cancelReminderTask(UUID playerUUID) {
+        BukkitRunnable task = playerReminderTasks.get(playerUUID);
+        if (task != null) {
+            task.cancel();
+            playerReminderTasks.remove(playerUUID);
+        }
     }
     
     // 检查玩家邮箱绑定状态
@@ -165,10 +190,14 @@ public final class EmailBind extends JavaPlugin implements Listener {
                         } else {
                             // 邮箱已绑定
                             unbindedPlayers.remove(player.getUniqueId());
+                            // 取消提示任务
+                            cancelReminderTask(player.getUniqueId());
                         }
                     } else {
                         // 玩家不存在于authme表中
                         unbindedPlayers.remove(player.getUniqueId());
+                        // 取消提示任务
+                        cancelReminderTask(player.getUniqueId());
                     }
                     
                     connection.close();
@@ -201,6 +230,8 @@ public final class EmailBind extends JavaPlugin implements Listener {
         playerEmailInputs.remove(playerUUID);
         playerVerificationCodes.remove(playerUUID);
         playerWaitingForCode.remove(playerUUID);
+        // 取消提示任务
+        cancelReminderTask(playerUUID);
     }
     
     // 玩家交互事件
@@ -273,7 +304,12 @@ public final class EmailBind extends JavaPlugin implements Listener {
                     updatePlayerEmail(player, email);
                     playerWaitingForCode.remove(playerUUID);
                 } else {
-                    player.sendMessage(ChatColor.RED + "§l[猫娘提醒] " + ChatColor.YELLOW + "验证码错误，请重新输入！喵～");
+                    // 发送三行格式错误提示（二次元风格）
+                    player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §c★ 呜喵～验证码错误呢！ ★");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §e★ 请仔细核对邮件中的验证码 ★");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §6★ 重新输入一次试试看吧喵～ ★");
+                    player.sendMessage(ChatColor.RED + "§l----------------------------------------");
                 }
                 return;
             }
@@ -286,9 +322,20 @@ public final class EmailBind extends JavaPlugin implements Listener {
                 playerVerificationCodes.put(playerUUID, code);
                 sendVerificationCodeEmail(message, code);
                 playerWaitingForCode.put(playerUUID, true);
-                player.sendMessage(ChatColor.GREEN + "§l[猫娘提醒] " + ChatColor.AQUA + "验证码已发送，请将验证码输入到聊天框！喵～");
+                
+                // 发送三行验证码发送成功提示（二次元风格）
+                player.sendMessage(ChatColor.GREEN + "§l----------------------------------------");
+                player.sendMessage(ChatColor.GREEN + "§l§o[猫娘提醒] §a★ 邮箱验证码已经发送啦！ ★");
+                player.sendMessage(ChatColor.GREEN + "§l§o[猫娘提醒] §b★ 快去查看邮件和垃圾箱 ★");
+                player.sendMessage(ChatColor.GREEN + "§l§o[猫娘提醒] §d★ 输入验证码完成绑定喵～ ★");
+                player.sendMessage(ChatColor.GREEN + "§l----------------------------------------");
             } else {
-                player.sendMessage(ChatColor.RED + "§l[猫娘提醒] " + ChatColor.YELLOW + "邮箱格式不正确，请重新输入！喵～");
+                // 发送三行格式错误提示（二次元风格）
+                player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §c★ 呜喵～邮箱格式错误呢！ ★");
+                player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §e★ 请检查邮箱地址是否正确 ★");
+                player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §6★ 重新输入一次试试看吧喵～ ★");
+                player.sendMessage(ChatColor.RED + "§l----------------------------------------");
             }
             return;
         }
