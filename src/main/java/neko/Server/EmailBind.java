@@ -129,16 +129,26 @@ public final class EmailBind extends JavaPlugin implements Listener {
             public void run() {
                 // 检查玩家是否仍然在线且未绑定
                 if (player.isOnline() && unbindedPlayers.containsKey(playerUUID)) {
-                    // 循环使用不同颜色
-                    ChatColor currentColor = colors[colorIndex % colors.length];
-                    colorIndex++;
-                    
-                    // 发送带横线的三行实质性内容的二次元猫娘风格提示
-                    player.sendMessage(currentColor + "§l----------------------------------------");
-                    player.sendMessage(currentColor + "§l§o[猫娘提醒] §d★ 亲爱的主人，您的邮箱还没有绑定哦！ ★");
-                    player.sendMessage(currentColor + "§l§o[猫娘提醒] §b★ 请在聊天框输入您的邮箱地址 ★");
-                    player.sendMessage(currentColor + "§l§o[猫娘提醒] §a★ 我会为您发送验证码完成绑定喵～ ★");
-                    player.sendMessage(currentColor + "§l----------------------------------------");
+                    // 检查玩家是否正在等待验证码输入
+                    if (playerWaitingForCode.containsKey(playerUUID) && playerWaitingForCode.get(playerUUID)) {
+                        // 发送等待验证码的提示
+                        ChatColor currentColor = colors[colorIndex % colors.length];
+                        colorIndex++;
+                        player.sendMessage(currentColor + "§l----------------------------------------");
+                        player.sendMessage(currentColor + "§l§o[猫娘提醒] §a★ 邮箱验证码已经发送啦！ ★");
+                        player.sendMessage(currentColor + "§l§o[猫娘提醒] §b★ 快去查看邮件和垃圾箱 ★");
+                        player.sendMessage(currentColor + "§l§o[猫娘提醒] §d★ 输入验证码完成绑定喵～ ★");
+                        player.sendMessage(currentColor + "§l----------------------------------------");
+                    } else {
+                        // 发送邮箱未绑定的提示
+                        ChatColor currentColor = colors[colorIndex % colors.length];
+                        colorIndex++;
+                        player.sendMessage(currentColor + "§l----------------------------------------");
+                        player.sendMessage(currentColor + "§l§o[猫娘提醒] §d★ 亲爱的主人，您的邮箱还没有绑定哦！ ★");
+                        player.sendMessage(currentColor + "§l§o[猫娘提醒] §b★ 请在聊天框输入您的邮箱地址 ★");
+                        player.sendMessage(currentColor + "§l§o[猫娘提醒] §a★ 我会为您发送验证码完成绑定喵～ ★");
+                        player.sendMessage(currentColor + "§l----------------------------------------");
+                    }
                 } else {
                     // 玩家已离线或已绑定，取消任务
                     playerReminderTasks.remove(playerUUID);
@@ -329,6 +339,9 @@ public final class EmailBind extends JavaPlugin implements Listener {
                 player.sendMessage(ChatColor.GREEN + "§l§o[猫娘提醒] §b★ 快去查看邮件和垃圾箱 ★");
                 player.sendMessage(ChatColor.GREEN + "§l§o[猫娘提醒] §d★ 输入验证码完成绑定喵～ ★");
                 player.sendMessage(ChatColor.GREEN + "§l----------------------------------------");
+                
+                // 停止原有的重复提示任务
+                cancelReminderTask(playerUUID);
             } else {
                 // 发送三行格式错误提示（二次元风格）
                 player.sendMessage(ChatColor.RED + "§l----------------------------------------");
