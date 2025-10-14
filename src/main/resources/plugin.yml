@@ -5,3 +5,7 @@ api-version: '1.21'
 authors: [ 不穿胖次の小奶猫 ]
 description: 邮箱绑定
 website: https://cnmsb.xin/
+commands:
+  bindemail:
+    description: 绑定邮箱
+    usage: /<command> <邮箱地址>

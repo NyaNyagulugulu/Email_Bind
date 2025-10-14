@@ -1,0 +1,31 @@
+# 邮箱绑定插件配置文件
+
+# 数据库配置
+database:
+  # 数据库主机地址
+  host: localhost
+  # 数据库端口
+  port: 3306
+  # 数据库名称
+  database: authme
+  # 数据库用户名
+  username: authme
+  # 数据库密码
+  password: 'wcjs123'
+  # 表名
+  table: authme
+
+# 邮箱SMTP配置
+smtp:
+  # SMTP服务器地址
+  host: smtp.exmail.qq.com
+  # SMTP端口
+  port: 465
+  # 邮箱用户名
+  username: support@cnmsb.xin
+  # 邮箱密码或授权码
+  password: 'qTHWV9pU4fR52rGf'
+  # 是否启用SSL
+  ssl: false
+  # 是否启用TLS
+  tls: true
