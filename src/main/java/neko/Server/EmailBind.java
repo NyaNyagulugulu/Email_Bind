@@ -26,7 +26,7 @@ public final class EmailBind extends JavaPlugin implements Listener {
     private String username;
     private String password;
     private String table;
-
+    
     // SMTP配置信息
     private String smtpHost;
     private int smtpPort;
@@ -34,7 +34,23 @@ public final class EmailBind extends JavaPlugin implements Listener {
     private String smtpPassword;
     private boolean smtpSSL;
     private boolean smtpTLS;
-
+    
+    // 临时邮箱域名列表
+    private static final String[] TEMP_EMAIL_DOMAINS = {
+        "10minutemail.com", "mailinator.com", "temp-mail.org", "maildrop.cc",
+        "guerrillamail.com", "sharklasers.com", "getnada.com", "mintemail.com",
+        "trashmail.com", "mailnesia.com", "dispostable.com", "tempmailaddress.com",
+        "mytemp.email", "emailondeck.com", "throwawaymail.com", "spoofmail.de",
+        "fakeinbox.com", "instantemailaddress.com", "spamgourmet.com", "getairmail.com",
+        "tempail.com", "spam4.me", "33mail.com", "moakt.com", "mailsac.com",
+        "mailnull.com", "tempmailo.com", "dropmail.me", "owlymail.com", "fakemail.net",
+        "luxusmail.org", "edumail.icu", "emailtemporal.org", "spambox.us", "tempemail.co",
+        "mail7.io", "temp-mail.io", "tmail.ai", "notmailinator.com", "anonaddy.com",
+        "emailsensei.com", "burnermail.io", "dismail.de", "guerrillamail.net", "mailcatch.com",
+        "nada.ltd", "mail-tester.com", "fakebox.org", "tempinbox.com", "gettempmail.com",
+        "mailpoof.com", "yopmail.com"
+    };
+    
     // 存储未绑定邮箱的玩家
     private Map<UUID, Boolean> unbindedPlayers = new HashMap<>();
     // 存储玩家输入的邮箱地址
@@ -52,8 +68,8 @@ public final class EmailBind extends JavaPlugin implements Listener {
         saveDefaultConfig();
         loadConfig();
         
-        // 释放默认文件
-        saveResource("bind.html", false);
+        // 释放默认文件（始终释放）
+        saveResource("bind.html", true);
         
         // 初始化数据库
         initializeDatabase();
@@ -291,8 +307,6 @@ public final class EmailBind extends JavaPlugin implements Listener {
         }
     }
     
-    // 玩家退出服务器事件
-    
     // 玩家聊天事件
     @EventHandler
     public void onPlayerChat(AsyncPlayerChatEvent event) {
@@ -326,6 +340,28 @@ public final class EmailBind extends JavaPlugin implements Listener {
             
             // 验证邮箱格式
             if (message.matches("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$")) {
+                // 检查是否为临时邮箱
+                if (isTempEmail(message)) {
+                    // 发送临时邮箱错误提示
+                    player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §c★ 呜喵～不能使用临时邮箱呢！ ★");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §e★ 请使用正规邮箱服务商的邮箱 ★");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §6★ 重新输入一次试试看吧喵～ ★");
+                    player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                    return;
+                }
+                
+                // 检查邮箱是否已被其他账号绑定
+                if (isEmailAlreadyUsed(message, player.getName())) {
+                    // 发送邮箱已使用错误提示
+                    player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §c★ 呜喵～这个邮箱已经被绑定了呢！ ★");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §e★ 请使用未绑定的邮箱地址 ★");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §6★ 重新输入一次试试看吧喵～ ★");
+                    player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                    return;
+                }
+                
                 playerEmailInputs.put(playerUUID, message);
                 // 生成并发送验证码
                 String code = generateVerificationCode();
@@ -353,58 +389,42 @@ public final class EmailBind extends JavaPlugin implements Listener {
             return;
         }
     }
-    private void updatePlayerEmail(Player player, String email) {
-        new BukkitRunnable() {
-            @Override
-            public void run() {
-                try {
-                    Connection connection = DriverManager.getConnection(
-                        "jdbc:mysql://" + host + ":" + port + "/" + database, 
-                        username, 
-                        password
-                    );
-                    
-                    PreparedStatement statement = connection.prepareStatement(
-                        "UPDATE " + table + " SET email = ? WHERE username = ?"
-                    );
-                    statement.setString(1, email);
-                    statement.setString(2, player.getName());
-                    
-                    int result = statement.executeUpdate();
-                    
-                    if (result > 0) {
-                        new BukkitRunnable() {
-                            @Override
-                            public void run() {
-                                player.sendMessage(ChatColor.GREEN + "邮箱绑定成功!");
-                                UUID playerUUID = player.getUniqueId();
-                                unbindedPlayers.remove(playerUUID);
-                                playerEmailInputs.remove(playerUUID);
-                                playerVerificationCodes.remove(playerUUID);
-                                playerWaitingForCode.remove(playerUUID);
-                            }
-                        }.runTask(EmailBind.this);
-                    } else {
-                        new BukkitRunnable() {
-                            @Override
-                            public void run() {
-                                player.sendMessage(ChatColor.RED + "邮箱绑定失败，请联系管理员!");
-                            }
-                        }.runTask(EmailBind.this);
-                    }
-                    
-                    connection.close();
-                } catch (SQLException e) {
-                    getLogger().severe("数据库更新出错: " + e.getMessage());
-                    new BukkitRunnable() {
-                        @Override
-                        public void run() {
-                            player.sendMessage(ChatColor.RED + "邮箱绑定失败，请联系管理员!");
-                        }
-                        }.runTask(EmailBind.this);
-                }
+    
+    // 检查是否为临时邮箱
+    private boolean isTempEmail(String email) {
+        String domain = email.substring(email.lastIndexOf('@') + 1).toLowerCase();
+        for (String tempDomain : TEMP_EMAIL_DOMAINS) {
+            if (domain.equals(tempDomain)) {
+                return true;
             }
-        }.runTaskAsynchronously(this);
+        }
+        return false;
+    }
+    
+    // 检查邮箱是否已被其他账号绑定
+    private boolean isEmailAlreadyUsed(String email, String playerName) {
+        try {
+            Connection connection = DriverManager.getConnection(
+                "jdbc:mysql://" + host + ":" + port + "/" + database, 
+                username, 
+                password
+            );
+            
+            PreparedStatement statement = connection.prepareStatement(
+                "SELECT username FROM " + table + " WHERE email = ? AND username != ?"
+            );
+            statement.setString(1, email);
+            statement.setString(2, playerName);
+            
+            ResultSet result = statement.executeQuery();
+            boolean emailUsed = result.next();
+            
+            connection.close();
+            return emailUsed;
+        } catch (SQLException e) {
+            getLogger().severe("数据库查询出错: " + e.getMessage());
+            return false;
+        }
     }
     
     // 生成随机验证码(16位数字)
@@ -415,6 +435,23 @@ public final class EmailBind extends JavaPlugin implements Listener {
             code.append(random.nextInt(10));
         }
         return code.toString();
+    }
+    
+    // 读取HTML模板文件
+    private String readHtmlTemplate(String filePath) {
+        try {
+            StringBuilder content = new StringBuilder();
+            java.nio.file.Path path = java.nio.file.Paths.get(filePath);
+            java.util.List<String> lines = java.nio.file.Files.readAllLines(path);
+            for (String line : lines) {
+                content.append(line).append("\n");
+            }
+            return content.toString();
+        } catch (Exception e) {
+            getLogger().severe("读取HTML模板文件失败: " + e.getMessage() + "，请检查插件配置目录是否存在bind.html文件");
+            // 如果无法读取文件，返回空字符串而不是默认模板
+            return "";
+        }
     }
     
     // 通过SMTP发送验证码(HTML格式)
@@ -453,7 +490,13 @@ public final class EmailBind extends JavaPlugin implements Listener {
                     
                     // 读取HTML模板
                     String templatePath = getDataFolder().getAbsolutePath() + "/bind.html";
-                    String htmlContent = readFileToString(templatePath);
+                    String htmlContent = readHtmlTemplate(templatePath);
+                    
+                    // 检查HTML内容是否为空
+                    if (htmlContent.isEmpty()) {
+                        getLogger().severe("HTML模板内容为空，请检查bind.html文件");
+                        return;
+                    }
                     
                     // 替换模板中的占位符
                     htmlContent = htmlContent.replace("%playername%", "玩家");
@@ -483,38 +526,60 @@ public final class EmailBind extends JavaPlugin implements Listener {
         }.runTaskAsynchronously(this);
     }
     
-    // 读取文件内容为字符串
-    private String readFileToString(String filePath) {
-        try {
-            StringBuilder content = new StringBuilder();
-            java.nio.file.Path path = java.nio.file.Paths.get(filePath);
-            java.util.List<String> lines = java.nio.file.Files.readAllLines(path);
-            for (String line : lines) {
-                content.append(line).append("\n");
+    // 更新玩家邮箱
+    private void updatePlayerEmail(Player player, String email) {
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                try {
+                    Connection connection = DriverManager.getConnection(
+                        "jdbc:mysql://" + host + ":" + port + "/" + database, 
+                        username, 
+                        password
+                    );
+                    
+                    PreparedStatement statement = connection.prepareStatement(
+                        "UPDATE " + table + " SET email = ? WHERE username = ?"
+                    );
+                    statement.setString(1, email);
+                    statement.setString(2, player.getName());
+                    
+                    int result = statement.executeUpdate();
+                    
+                    if (result > 0) {
+                        new BukkitRunnable() {
+                            @Override
+                            public void run() {
+                                player.sendMessage(ChatColor.GREEN + "邮箱绑定成功!");
+                                UUID playerUUID = player.getUniqueId();
+                                unbindedPlayers.remove(playerUUID);
+                                playerEmailInputs.remove(playerUUID);
+                                playerVerificationCodes.remove(playerUUID);
+                                playerWaitingForCode.remove(playerUUID);
+                                // 取消提示任务
+                                cancelReminderTask(playerUUID);
+                            }
+                        }.runTask(EmailBind.this);
+                    } else {
+                        new BukkitRunnable() {
+                            @Override
+                            public void run() {
+                                player.sendMessage(ChatColor.RED + "邮箱绑定失败，请联系管理员!");
+                            }
+                        }.runTask(EmailBind.this);
+                    }
+                    
+                    connection.close();
+                } catch (SQLException e) {
+                    getLogger().severe("数据库更新出错: " + e.getMessage());
+                    new BukkitRunnable() {
+                        @Override
+                        public void run() {
+                            player.sendMessage(ChatColor.RED + "邮箱绑定失败，请联系管理员!");
+                        }
+                        }.runTask(EmailBind.this);
+                }
             }
-            return content.toString();
-        } catch (Exception e) {
-            getLogger().warning("读取HTML模板文件失败，使用默认模板: " + e.getMessage());
-            // 默认HTML模板
-            return "<div style=\"font-family: Arial, sans-serif; max-width: 600px; margin: auto; background-color: #f5f5f5; padding: 20px;\">" +
-                   "<h1 style=\"color: #333; border-bottom: 2px solid #ddd; padding-bottom: 10px;\">邮箱绑定验证码</h1>" +
-                   "<div style=\"background: #fff; padding: 25px; border-radius: 10px; margin-top: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);\">" +
-                   "<p style=\"font-size: 18px; color: #666;\">您正在绑定邮箱到服务器账户，以下是您的验证码：</p>" +
-                   "<div style=\"background: #f0f0f0; padding: 15px; border-radius: 5px; margin: 15px 0; text-align: center;\">" +
-                   "<p style=\"font-size: 24px; color: #333; margin: 0; font-weight: bold;\">%generatedcode%</p>" +
-                   "</div>" +
-                   "<p style=\"color: #999;\">此验证码将在10分钟后过期，请尽快在游戏内输入完成绑定。</p>" +
-                   "<div style=\"background: #e6f3ff; padding: 15px; border-radius: 5px; margin-top: 20px;\">" +
-                   "<p>使用说明：</p>" +
-                   "<p style=\"margin: 10px 0;\">请在游戏聊天框中输入以下命令：<br>" +
-                   "<code style=\"background: #fff; padding: 8px; border-radius: 3px; display: inline-block;\">%generatedcode%</code></p>" +
-                   "</div>" +
-                   "</div>" +
-                   "<footer style=\"margin-top: 30px; text-align: center;\">" +
-                   "<p style=\"color: #999;\">~ 感谢您使用我们的服务器 ~</p>" +
-                   "<div style=\"font-size: 12px; color: #ccc;\"><p>如有问题请联系管理员</p></div>" +
-                   "</footer>" +
-                   "</div>".replace("%generatedcode%", generateVerificationCode());
-        }
+        }.runTaskAsynchronously(this);
     }
 }
