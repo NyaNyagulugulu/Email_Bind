@@ -1,0 +1,7 @@
+name: EmailBind
+version: '1.0-SNAPSHOT'
+main: neko.Server.EmailBind
+api-version: '1.21'
+authors: [ 不穿胖次の小奶猫 ]
+description: 邮箱绑定
+website: https://cnmsb.xin/
