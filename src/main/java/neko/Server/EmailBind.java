@@ -8,6 +8,12 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.player.*;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitRunnable;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.MapMeta;
+import org.bukkit.map.MapView;
+import org.bukkit.map.MapRenderer;
+import org.bukkit.map.MapCanvas;
+import org.bukkit.map.MinecraftFont;
 
 import javax.mail.*;
 import javax.mail.internet.InternetAddress;
@@ -16,6 +22,9 @@ import javax.mail.internet.MimeMessage;
 import javax.mail.internet.MimeMultipart;
 import java.sql.*;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+
+
 
 public final class EmailBind extends JavaPlugin implements Listener {
 
@@ -34,6 +43,9 @@ public final class EmailBind extends JavaPlugin implements Listener {
     private String smtpPassword;
     private boolean smtpSSL;
     private boolean smtpTLS;
+    
+    // 2FA管理器
+    private TwoFactorAuth twoFactorAuth;
     
     // 临时邮箱域名列表
     private static final String[] TEMP_EMAIL_DOMAINS = {
@@ -61,6 +73,8 @@ public final class EmailBind extends JavaPlugin implements Listener {
     private Map<UUID, Boolean> playerWaitingForCode = new HashMap<>();
     // 存储玩家的提示任务
     private Map<UUID, BukkitRunnable> playerReminderTasks = new HashMap<>();
+    // 存储玩家的IP地址
+    private Map<UUID, String> playerIPs = new ConcurrentHashMap<>();
     
     @Override
     public void onEnable() {
@@ -73,6 +87,10 @@ public final class EmailBind extends JavaPlugin implements Listener {
         
         // 初始化数据库
         initializeDatabase();
+        
+        // 初始化2FA管理器
+        twoFactorAuth = new TwoFactorAuth(this);
+        twoFactorAuth.loadConfig();
         
         // 注册事件监听器
         Bukkit.getPluginManager().registerEvents(this, this);
@@ -93,6 +111,27 @@ public final class EmailBind extends JavaPlugin implements Listener {
     @Override
     public void onDisable() {
         getLogger().info("EmailBind插件已禁用!");
+    }
+    
+    // 获取数据库配置的公共方法
+    public String getHost() {
+        return host;
+    }
+    
+    public int getPort() {
+        return port;
+    }
+    
+    public String getDatabase() {
+        return database;
+    }
+    
+    public String getUsername() {
+        return username;
+    }
+    
+    public String getPassword() {
+        return password;
     }
     
     // 加载配置
@@ -199,7 +238,7 @@ public final class EmailBind extends JavaPlugin implements Listener {
                     );
                     
                     PreparedStatement statement = connection.prepareStatement(
-                        "SELECT email FROM " + table + " WHERE username = ?"
+                        "SELECT email, ip FROM " + table + " WHERE username = ?"
                     );
                     statement.setString(1, player.getName());
                     
@@ -207,6 +246,12 @@ public final class EmailBind extends JavaPlugin implements Listener {
                     
                     if (result.next()) {
                         String email = result.getString("email");
+                        String lastIP = result.getString("ip");
+                        String currentIP = player.getAddress().getAddress().getHostAddress();
+                        
+                        // 存储当前IP地址
+                        playerIPs.put(player.getUniqueId(), currentIP);
+                        
                         if (email == null || email.isEmpty()) {
                             // 邮箱未绑定
                             UUID playerUUID = player.getUniqueId();
@@ -218,6 +263,15 @@ public final class EmailBind extends JavaPlugin implements Listener {
                             unbindedPlayers.remove(player.getUniqueId());
                             // 取消提示任务
                             cancelReminderTask(player.getUniqueId());
+                            
+                            // 只有在邮箱绑定完成后才检查2FA
+                            // 检查玩家是否需要2FA验证
+                            twoFactorAuth.checkPlayer2FARequirement(player);
+                            
+                            // 检查IP是否变化，如果变化则强制2FA验证
+                            if (lastIP != null && !lastIP.equals(currentIP)) {
+                                twoFactorAuth.force2FAForIPChange(player);
+                            }
                         }
                     } else {
                         // 玩家不存在于authme表中
@@ -233,6 +287,8 @@ public final class EmailBind extends JavaPlugin implements Listener {
             }
         }.runTaskAsynchronously(this);
     }
+    
+    
     
     // 玩家加入服务器事件
     @EventHandler
@@ -256,6 +312,11 @@ public final class EmailBind extends JavaPlugin implements Listener {
         playerEmailInputs.remove(playerUUID);
         playerVerificationCodes.remove(playerUUID);
         playerWaitingForCode.remove(playerUUID);
+        playerIPs.remove(playerUUID);
+        // 清理2FA相关资源
+        if (twoFactorAuth != null) {
+            twoFactorAuth.removePlayer2FA(playerUUID);
+        }
         // 取消提示任务
         cancelReminderTask(playerUUID);
     }
@@ -264,7 +325,15 @@ public final class EmailBind extends JavaPlugin implements Listener {
     @EventHandler
     public void onPlayerInteract(PlayerInteractEvent event) {
         Player player = event.getPlayer();
-        if (unbindedPlayers.containsKey(player.getUniqueId())) {
+        UUID playerUUID = player.getUniqueId();
+        // 检查是否未绑定邮箱
+        if (unbindedPlayers.containsKey(playerUUID)) {
+            event.setCancelled(true);
+        }
+        // 检查是否正在验证2FA（而不是设置2FA）
+        else if (twoFactorAuth.getPlayersRequiring2FA().containsKey(playerUUID) && 
+                twoFactorAuth.getPlayersWaitingFor2FA().containsKey(playerUUID) && 
+                !twoFactorAuth.isSettingUp2FA(playerUUID)) {
             event.setCancelled(true);
         }
     }
@@ -273,7 +342,15 @@ public final class EmailBind extends JavaPlugin implements Listener {
     @EventHandler
     public void onPlayerDropItem(PlayerDropItemEvent event) {
         Player player = event.getPlayer();
-        if (unbindedPlayers.containsKey(player.getUniqueId())) {
+        UUID playerUUID = player.getUniqueId();
+        // 检查是否未绑定邮箱
+        if (unbindedPlayers.containsKey(playerUUID)) {
+            event.setCancelled(true);
+        }
+        // 检查是否正在验证2FA（而不是设置2FA）
+        else if (twoFactorAuth.getPlayersRequiring2FA().containsKey(playerUUID) && 
+                twoFactorAuth.getPlayersWaitingFor2FA().containsKey(playerUUID) && 
+                !twoFactorAuth.isSettingUp2FA(playerUUID)) {
             event.setCancelled(true);
         }
     }
@@ -282,7 +359,15 @@ public final class EmailBind extends JavaPlugin implements Listener {
     @EventHandler
     public void onPlayerPickupItem(PlayerPickupItemEvent event) {
         Player player = event.getPlayer();
-        if (unbindedPlayers.containsKey(player.getUniqueId())) {
+        UUID playerUUID = player.getUniqueId();
+        // 检查是否未绑定邮箱
+        if (unbindedPlayers.containsKey(playerUUID)) {
+            event.setCancelled(true);
+        }
+        // 检查是否正在验证2FA（而不是设置2FA）
+        else if (twoFactorAuth.getPlayersRequiring2FA().containsKey(playerUUID) && 
+                twoFactorAuth.getPlayersWaitingFor2FA().containsKey(playerUUID) && 
+                !twoFactorAuth.isSettingUp2FA(playerUUID)) {
             event.setCancelled(true);
         }
     }
@@ -291,28 +376,147 @@ public final class EmailBind extends JavaPlugin implements Listener {
     @EventHandler
     public void onPlayerMove(PlayerMoveEvent event) {
         Player player = event.getPlayer();
-        if (unbindedPlayers.containsKey(player.getUniqueId())) {
-            // 限制移动
-            event.setCancelled(true);
+        UUID playerUUID = player.getUniqueId();
+        
+        // 检查是否未绑定邮箱
+        if (unbindedPlayers.containsKey(playerUUID)) {
+            // 限制未绑定邮箱玩家的移动，但允许视角转动
+            if (event.getFrom().getX() != event.getTo().getX() || 
+                event.getFrom().getY() != event.getTo().getY() || 
+                event.getFrom().getZ() != event.getTo().getZ()) {
+                // 只取消位置变化，允许视角转动
+                event.setCancelled(true);
+            }
+        }
+        // 检查是否正在等待2FA验证码输入（不包括设置2FA时）
+        else if (twoFactorAuth.getPlayersRequiring2FA().containsKey(playerUUID) && 
+                twoFactorAuth.getPlayersWaitingFor2FA().containsKey(playerUUID) && 
+                !twoFactorAuth.isSettingUp2FA(playerUUID)) {
+            // 限制正在验证2FA的玩家移动，但允许视角转动
+            if (event.getFrom().getX() != event.getTo().getX() || 
+                event.getFrom().getY() != event.getTo().getY() || 
+                event.getFrom().getZ() != event.getTo().getZ()) {
+                // 只取消位置变化，允许视角转动
+                event.setCancelled(true);
+            }
         }
     }
+    
+    
     
     // 玩家传送事件
     @EventHandler
     public void onPlayerTeleport(PlayerTeleportEvent event) {
         Player player = event.getPlayer();
-        if (unbindedPlayers.containsKey(player.getUniqueId())) {
+        UUID playerUUID = player.getUniqueId();
+        // 检查是否未绑定邮箱
+        if (unbindedPlayers.containsKey(playerUUID)) {
+            // 取消传送
+            event.setCancelled(true);
+        }
+        // 检查是否正在验证2FA（而不是设置2FA）
+        else if (twoFactorAuth.getPlayersRequiring2FA().containsKey(playerUUID) && 
+                twoFactorAuth.getPlayersWaitingFor2FA().containsKey(playerUUID) && 
+                !twoFactorAuth.isSettingUp2FA(playerUUID)) {
             // 取消传送
             event.setCancelled(true);
         }
     }
     
-    // 玩家聊天事件
+    // 玩家命令事件
     @EventHandler
-    public void onPlayerChat(AsyncPlayerChatEvent event) {
+    public void onPlayerCommandPreprocess(PlayerCommandPreprocessEvent event) {
+        Player player = event.getPlayer();
+        UUID playerUUID = player.getUniqueId();
+        // 检查是否未绑定邮箱
+        if (unbindedPlayers.containsKey(playerUUID)) {
+            // 未绑定邮箱的玩家不允许执行命令
+            event.setCancelled(true);
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §c★ 请先绑定邮箱再执行命令呢！ ★");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §e★ 在聊天框输入您的邮箱地址 ★");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §6★ 完成绑定后即可正常使用命令喵～ ★");
+                    player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                }
+            }.runTask(EmailBind.this);
+        }
+        // 检查是否正在验证2FA（而不是设置2FA）
+        else if (twoFactorAuth.getPlayersRequiring2FA().containsKey(playerUUID) && 
+                twoFactorAuth.getPlayersWaitingFor2FA().containsKey(playerUUID) && 
+                !twoFactorAuth.isSettingUp2FA(playerUUID)) {
+            // 玩家正在等待2FA验证，不允许执行命令
+            event.setCancelled(true);
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §c★ 请先完成2FA验证再执行命令呢！ ★");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §e★ 输入Google Authenticator中的6位验证码 ★");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §6★ 完成验证后即可正常使用命令喵～ ★");
+                    player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                }
+            }.runTask(EmailBind.this);
+        }
+    }
+    
+    // 玩家聊天和2FA验证事件
+    @EventHandler
+    public void onPlayerChatOr2FA(AsyncPlayerChatEvent event) {
         Player player = event.getPlayer();
         UUID playerUUID = player.getUniqueId();
         String message = event.getMessage();
+        
+        // 检查玩家是否正在等待2FA验证码输入
+        if (twoFactorAuth.getPlayersWaitingFor2FA().containsKey(playerUUID) && 
+            twoFactorAuth.getPlayersWaitingFor2FA().get(playerUUID)) {
+            event.setCancelled(true);
+            
+            // 验证2FA验证码
+            if (message.matches("^\\d{6}$")) { // 6位数字验证码
+                if (twoFactorAuth.verify2FA(player, message)) {
+                    // 2FA验证成功
+                    twoFactorAuth.removePlayer2FA(playerUUID);
+                    new BukkitRunnable() {
+                        @Override
+                        public void run() {
+                            player.sendMessage(ChatColor.GREEN + "§l----------------------------------------");
+                            player.sendMessage(ChatColor.GREEN + "§l§o[猫娘提醒] §a★ 2FA验证成功！ ★");
+                            player.sendMessage(ChatColor.GREEN + "§l§o[猫娘提醒] §b★ 欢迎回来，管理员大人～ ★");
+                            player.sendMessage(ChatColor.GREEN + "§l----------------------------------------");
+                        }
+                    }.runTask(EmailBind.this);
+                } else {
+                    // 2FA验证失败
+                    new BukkitRunnable() {
+                        @Override
+                        public void run() {
+                            player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                            player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §c★ 呜喵～2FA验证码错误呢！ ★");
+                            player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §e★ 请检查Google Authenticator中的验证码 ★");
+                            player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §6★ 重新输入一次试试看吧喵～ ★");
+                            player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                        }
+                    }.runTask(EmailBind.this);
+                }
+                return;
+            } else {
+                // 输入的不是6位数字验证码
+                new BukkitRunnable() {
+                    @Override
+                    public void run() {
+                        player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                        player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §c★ 呜喵～请输入6位数字验证码呢！ ★");
+                        player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §e★ 打开Google Authenticator查看 ★");
+                        player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §6★ 重新输入一次试试看吧喵～ ★");
+                        player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                    }
+                }.runTask(EmailBind.this);
+                return;
+            }
+        }
         
         // 检查玩家是否未绑定邮箱
         if (unbindedPlayers.containsKey(playerUUID)) {
@@ -331,7 +535,7 @@ public final class EmailBind extends JavaPlugin implements Listener {
                     // 发送三行格式错误提示（二次元风格）
                     player.sendMessage(ChatColor.RED + "§l----------------------------------------");
                     player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §c★ 呜喵～验证码错误呢！ ★");
-                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §e★ 请仔细核对邮件中的验证码 ★");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §e★ 请仔细核对邮件中的6位验证码 ★");
                     player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §6★ 重新输入一次试试看吧喵～ ★");
                     player.sendMessage(ChatColor.RED + "§l----------------------------------------");
                 }
@@ -373,7 +577,7 @@ public final class EmailBind extends JavaPlugin implements Listener {
                 player.sendMessage(ChatColor.GREEN + "§l----------------------------------------");
                 player.sendMessage(ChatColor.GREEN + "§l§o[猫娘提醒] §a★ 邮箱验证码已经发送啦！ ★");
                 player.sendMessage(ChatColor.GREEN + "§l§o[猫娘提醒] §b★ 快去查看邮件和垃圾箱 ★");
-                player.sendMessage(ChatColor.GREEN + "§l§o[猫娘提醒] §d★ 输入验证码完成绑定喵～ ★");
+                player.sendMessage(ChatColor.GREEN + "§l§o[猫娘提醒] §d★ 输入6位验证码完成绑定喵～ ★");
                 player.sendMessage(ChatColor.GREEN + "§l----------------------------------------");
                 
                 // 停止原有的重复提示任务
@@ -427,11 +631,11 @@ public final class EmailBind extends JavaPlugin implements Listener {
         }
     }
     
-    // 生成随机验证码(16位数字)
+    // 生成随机验证码(6位数字)
     private String generateVerificationCode() {
         Random random = new Random();
         StringBuilder code = new StringBuilder();
-        for (int i = 0; i < 16; i++) {
+        for (int i = 0; i < 6; i++) {
             code.append(random.nextInt(10));
         }
         return code.toString();
@@ -526,6 +730,8 @@ public final class EmailBind extends JavaPlugin implements Listener {
         }.runTaskAsynchronously(this);
     }
     
+    
+    
     // 更新玩家邮箱
     private void updatePlayerEmail(Player player, String email) {
         new BukkitRunnable() {
@@ -558,6 +764,7 @@ public final class EmailBind extends JavaPlugin implements Listener {
                                 playerWaitingForCode.remove(playerUUID);
                                 // 取消提示任务
                                 cancelReminderTask(playerUUID);
+                                // 清理二维码地图（由TwoFactorAuth处理）
                             }
                         }.runTask(EmailBind.this);
                     } else {
@@ -582,4 +789,6 @@ public final class EmailBind extends JavaPlugin implements Listener {
             }
         }.runTaskAsynchronously(this);
     }
+    
+    
 }

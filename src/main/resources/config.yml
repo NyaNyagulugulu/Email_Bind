@@ -24,8 +24,15 @@ smtp:
   # 邮箱用户名
   username: support@cnmsb.xin
   # 邮箱密码或授权码
-  password: ''
+  password:
   # 是否启用SSL
   ssl: true
   # 是否启用TLS
   tls: false
+
+# 2FA配置
+twofa:
+  # 需要验证2FA的权限节点
+  permission: "emailbind.twofa"
+  # 2FA密钥存储表名
+  table: "twofa_secrets"

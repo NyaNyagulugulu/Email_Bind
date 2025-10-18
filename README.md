@@ -1,78 +1,98 @@
-# EmailBind 邮箱绑定插件
+# EmailBind 插件
 
-一个为Minecraft服务器设计的邮箱绑定插件，确保玩家账号安全。
+一个为Minecraft服务器设计的插件，用于强制玩家绑定邮箱并提供双重身份验证(2FA)功能。
 
-## 功能特点
+## 功能特性
 
-- **强制邮箱绑定**：新玩家必须绑定邮箱才能正常使用服务器
-- **邮箱验证**：通过SMTP发送验证码到玩家邮箱进行验证
-- **二次元猫娘风格**：所有提示信息都采用可爱的猫娘风格
-- **权限限制**：未绑定邮箱的玩家将被限制所有操作
-- **HTML邮件模板**：支持自定义邮件模板
+1. **邮箱绑定验证**：
+   - 玩家加入服务器后必须绑定邮箱
+   - 通过SMTP发送验证码到玩家邮箱
+   - 验证码验证后完成邮箱绑定
 
-## 安装说明
+2. **双重身份验证(2FA)**：
+   - 仅拥有指定权限节点的玩家需要使用Google Authenticator进行2FA
+   - 通过游戏内地图显示二维码，方便扫描
+   - IP地址变化时重新验证2FA
 
-1. 将编译好的jar文件放入服务器的`plugins`文件夹
-2. 启动服务器，插件会自动生成配置文件
-3. 修改`config.yml`中的数据库和SMTP配置
-4. 重启服务器使配置生效
+3. **安全防护**：
+   - 临时邮箱检测和阻止
+   - 邮箱重复绑定检查
+   - 未验证玩家限制所有操作
 
 ## 配置说明
 
 ### 数据库配置
 ```yaml
 database:
-  host: localhost       # 数据库主机地址
-  port: 3306            # 数据库端口
-  database: authme      # 数据库名称
-  username: root        # 数据库用户名
-  password: 'wcjs123'   # 数据库密码
-  table: authme         # 表名
+  host: localhost        # 数据库主机地址
+  port: 3306             # 数据库端口
+  database: authme       # 数据库名称
+  username: root         # 数据库用户名
+  password: 'wcjs123'    # 数据库密码
+  table: authme          # AuthMe表名
 ```
 
-### SMTP配置
+### 邮箱SMTP配置
 ```yaml
 smtp:
-  host: smtp.exmail.qq.com   # SMTP服务器地址
-  port: 465                  # SMTP端口
-  username: support@cnmsb.xin # 邮箱用户名
-  password: '' # 邮箱密码或授权码
-  ssl: false                 # 是否启用SSL
-  tls: true                  # 是否启用TLS
+  host: smtp.exmail.qq.com  # SMTP服务器地址
+  port: 465                 # SMTP端口
+  username: support@cnmsb.xin  # 邮箱用户名
+  password: ''              # 邮箱密码或授权码
+  ssl: true                 # 是否启用SSL
+  tls: false                # 是否启用TLS
 ```
 
-## 使用方法
+### 2FA配置
+```yaml
+twofa:
+  permission: "emailbind.twofa"  # 需要验证2FA的权限节点
+  table: "twofa_secrets"         # 2FA密钥存储表名
+```
 
-1. 玩家加入服务器后，如果未绑定邮箱，会收到持续的提示消息
-2. 玩家在聊天框输入邮箱地址
-3. 插件会发送验证码到玩家邮箱
-4. 玩家输入验证码完成绑定
-5. 绑定成功后解除所有限制
+## 使用说明
 
-## 自定义邮件模板
+1. **邮箱绑定流程**：
+   - 玩家加入服务器后会收到邮箱绑定提示
+   - 在聊天框输入邮箱地址
+   - 系统发送6位验证码到邮箱
+   - 输入验证码完成绑定
 
-插件会在配置目录生成`bind.html`文件，您可以自定义邮件模板。
-可用的占位符：
-- `%playername%`：玩家名称
-- `%servername%`：服务器名称
-- `%generatedcode%`：验证码
-- `%minutesvalid%`：验证码有效期
+2. **2FA设置流程**：
+   - 仅拥有`emailbind.twofa`权限节点的玩家在首次加入或IP变化时需要设置2FA
+   - 系统自动生成Google Authenticator二维码
+   - 二维码显示在玩家手中的地图上
+   - 使用Google Authenticator扫描二维码
+   - 输入6位验证码完成2FA设置
 
-## 许可证
+3. **安全检查**：
+   - 自动检测并阻止临时邮箱
+   - 防止一个邮箱绑定多个账号
+   - 未完成验证的玩家无法进行任何操作
 
-GNU General Public License v3.0
+## 数据库表结构
 
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+### 2FA密钥存储表 (twofa_secrets)
+```sql
+CREATE TABLE IF NOT EXISTS twofa_secrets (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(255) NOT NULL UNIQUE,
+    secret VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
 
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+## 依赖库
 
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see <https://www.gnu.org/licenses/>.
+- Spigot API
+- MySQL Connector
+- JavaMail API
+- Google Authenticator
+- ZXing (二维码生成)
 
-**许可证说明**：本插件使用GPLv3许可证，您可以自由地运行、研究、分享（复制）和修改软件。但如果您分发修改后的版本，必须同样使用GPLv3许可证开源您的修改。
+## 注意事项
+
+1. 确保数据库连接信息正确
+2. 配置正确的SMTP服务器信息
+3. 插件会自动创建所需的数据库表
+4. 建议定期备份twofa_secrets表中的数据
