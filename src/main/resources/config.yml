@@ -15,6 +15,6 @@ smtp:
   host: smtp.exmail.qq.com
   port: 465
   username: support@cnmsb.xin
-  password: qTHWV9pU4fR52rGf
+  password:
   ssl: true
   tls: false
