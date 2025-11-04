@@ -5,7 +5,16 @@ import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.*;
+import org.bukkit.event.player.PlayerFishEvent;
+import org.bukkit.event.player.PlayerInteractEntityEvent;
+import org.bukkit.event.player.PlayerItemConsumeEvent;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitRunnable;
 
@@ -70,6 +79,8 @@ public final class EmailBind extends JavaPlugin implements Listener {
     private Map<UUID, BukkitRunnable> playerReminderTasks = new HashMap<>();
     // 存储玩家的IP地址
     private Map<UUID, String> playerIPs = new ConcurrentHashMap<>();
+    // 存储玩家的原始背包内容
+    private Map<UUID, ItemStack[]> playerInventories = new ConcurrentHashMap<>();
     
     @Override
     public void onEnable() {
@@ -210,69 +221,108 @@ public final class EmailBind extends JavaPlugin implements Listener {
         playerReminderTasks.put(playerUUID, task);
     }
     
-    // 取消提示任务
-    private void cancelReminderTask(UUID playerUUID) {
-        BukkitRunnable task = playerReminderTasks.get(playerUUID);
-        if (task != null) {
-            task.cancel();
-            playerReminderTasks.remove(playerUUID);
-        }
-    }
-    
-    // 检查玩家邮箱绑定状态
-    private void checkPlayerEmail(Player player) {
+    // 取消提示任务
+    private void cancelReminderTask(UUID playerUUID) {
+        BukkitRunnable task = playerReminderTasks.get(playerUUID);
+        if (task != null) {
+            task.cancel();
+            playerReminderTasks.remove(playerUUID);
+        }
+    }
+    
+    // 隐藏玩家背包
+    private void hidePlayerInventory(Player player) {
         new BukkitRunnable() {
             @Override
             public void run() {
-                try {
-                    Connection connection = DriverManager.getConnection(
-                        "jdbc:mysql://" + host + ":" + port + "/" + database + 
-                        "?useSSL=" + databaseSSL + "&sslMode=" + databaseSSLMode, 
-                        username, 
-                        password
-                    );
-                    
-                    PreparedStatement statement = connection.prepareStatement(
-                        "SELECT email, ip FROM " + table + " WHERE username = ?"
-                    );
-                    statement.setString(1, player.getName());
-                    
-                    ResultSet result = statement.executeQuery();
-                    
-                    if (result.next()) {
-                        String email = result.getString("email");
-                        String lastIP = result.getString("ip");
-                        String currentIP = player.getAddress().getAddress().getHostAddress();
-                        
-                        // 存储当前IP地址
-                        playerIPs.put(player.getUniqueId(), currentIP);
-                        
-                        if (email == null || email.isEmpty()) {
-                            // 邮箱未绑定
-                            UUID playerUUID = player.getUniqueId();
-                            unbindedPlayers.put(playerUUID, true);
-                            // 启动重复提示任务
-                            startReminderTask(player, playerUUID);
-                        } else {
-                            // 邮箱已绑定
-                            unbindedPlayers.remove(player.getUniqueId());
-                            // 取消提示任务
-                            cancelReminderTask(player.getUniqueId());
-
-                        }
-                    } else {
-                        // 玩家不存在于authme表中
-                        unbindedPlayers.remove(player.getUniqueId());
-                        // 取消提示任务
-                        cancelReminderTask(player.getUniqueId());
-                    }
-                    
-                    connection.close();
-                } catch (SQLException e) {
-                    getLogger().severe("数据库查询出错: " + e.getMessage());
+                UUID playerUUID = player.getUniqueId();
+                // 保存玩家原始背包内容
+                if (!playerInventories.containsKey(playerUUID)) {
+                    playerInventories.put(playerUUID, player.getInventory().getContents().clone());
+                }
+                // 清空玩家背包以隐藏物品
+                player.getInventory().clear();
+                // 可以选择给玩家一个提示物品，说明需要绑定邮箱
+                // 例如：player.getInventory().setItem(0, new ItemStack(Material.PAPER));
+            }
+        }.runTask(EmailBind.this);
+    }
+    
+    // 恢复玩家背包
+    private void showPlayerInventory(Player player) {
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                UUID playerUUID = player.getUniqueId();
+                // 恢复玩家原始背包内容
+                if (playerInventories.containsKey(playerUUID)) {
+                    player.getInventory().setContents(playerInventories.get(playerUUID));
+                    playerInventories.remove(playerUUID);
                 }
             }
-        }.runTaskAsynchronously(this);
+        }.runTask(EmailBind.this);
+    }
+    
+    // 检查玩家邮箱绑定状态
+    private void checkPlayerEmail(Player player) {
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                try {
+                    Connection connection = DriverManager.getConnection(
+                        "jdbc:mysql://" + host + ":" + port + "/" + database + 
+                        "?useSSL=" + databaseSSL + "&sslMode=" + databaseSSLMode, 
+                        username, 
+                        password
+                    );
+                    
+                    PreparedStatement statement = connection.prepareStatement(
+                        "SELECT email, ip FROM " + table + " WHERE username = ?"
+                    );
+                    statement.setString(1, player.getName());
+                    
+                    ResultSet result = statement.executeQuery();
+                    
+                    if (result.next()) {
+                        String email = result.getString("email");
+                        String lastIP = result.getString("ip");
+                        String currentIP = player.getAddress().getAddress().getHostAddress();
+                        
+                        // 存储当前IP地址
+                        playerIPs.put(player.getUniqueId(), currentIP);
+                        
+                        if (email == null || email.isEmpty()) {
+                            // 邮箱未绑定
+                            UUID playerUUID = player.getUniqueId();
+                            unbindedPlayers.put(playerUUID, true);
+                            // 启动重复提示任务
+                            startReminderTask(player, playerUUID);
+                            // 隐藏背包内容
+                            hidePlayerInventory(player);
+                        } else {
+                            // 邮箱已绑定
+                            unbindedPlayers.remove(player.getUniqueId());
+                            // 取消提示任务
+                            cancelReminderTask(player.getUniqueId());
+                            // 恢复背包内容
+                            showPlayerInventory(player);
+
+                        }
+                    } else {
+                        // 玩家不存在于authme表中
+                        unbindedPlayers.remove(player.getUniqueId());
+                        // 取消提示任务
+                        cancelReminderTask(player.getUniqueId());
+                        // 恢复背包内容
+                        showPlayerInventory(player);
+                    }
+                    
+                    connection.close();
+                } catch (SQLException e) {
+                    getLogger().severe("数据库查询出错: " + e.getMessage());
+                }
+            }
+        }.runTaskAsynchronously(this);
     }
     
     
@@ -290,29 +340,31 @@ public final class EmailBind extends JavaPlugin implements Listener {
         }.runTaskLater(this, 20L);
     }
     
-    // 玩家退出服务器事件
-    @EventHandler
-    public void onPlayerQuit(PlayerQuitEvent event) {
-        Player player = event.getPlayer();
-        UUID playerUUID = player.getUniqueId();
-        unbindedPlayers.remove(playerUUID);
-        playerEmailInputs.remove(playerUUID);
-        playerVerificationCodes.remove(playerUUID);
-        playerWaitingForCode.remove(playerUUID);
-        playerIPs.remove(playerUUID);
-        // 取消提示任务
-        cancelReminderTask(playerUUID);
+    // 玩家退出服务器事件
+    @EventHandler
+    public void onPlayerQuit(PlayerQuitEvent event) {
+        Player player = event.getPlayer();
+        UUID playerUUID = player.getUniqueId();
+        unbindedPlayers.remove(playerUUID);
+        playerEmailInputs.remove(playerUUID);
+        playerVerificationCodes.remove(playerUUID);
+        playerWaitingForCode.remove(playerUUID);
+        playerIPs.remove(playerUUID);
+        playerInventories.remove(playerUUID);
+        // 取消提示任务
+        cancelReminderTask(playerUUID);
     }
     
-    // 玩家交互事件
-    @EventHandler
-    public void onPlayerInteract(PlayerInteractEvent event) {
-        Player player = event.getPlayer();
-        UUID playerUUID = player.getUniqueId();
-        // 检查是否未绑定邮箱
-        if (unbindedPlayers.containsKey(playerUUID)) {
-            event.setCancelled(true);
-        }
+    // 玩家交互事件
+    @EventHandler
+    public void onPlayerInteract(PlayerInteractEvent event) {
+        Player player = event.getPlayer();
+        UUID playerUUID = player.getUniqueId();
+        // 检查是否未绑定邮箱
+        if (unbindedPlayers.containsKey(playerUUID)) {
+            // 取消所有交互，包括右键打开菜单等
+            event.setCancelled(true);
+        }
     }
     
     // 玩家丢弃物品事件
@@ -391,9 +443,160 @@ public final class EmailBind extends JavaPlugin implements Listener {
         }
     }
     
-    // 玩家聊天验证事件
+    // 玩家攻击事件
     @EventHandler
-    public void onPlayerChatOr2FA(AsyncPlayerChatEvent event) {
+    public void onPlayerAttack(EntityDamageByEntityEvent event) {
+        if (event.getDamager() instanceof Player) {
+            Player player = (Player) event.getDamager();
+            UUID playerUUID = player.getUniqueId();
+            // 检查是否未绑定邮箱
+            if (unbindedPlayers.containsKey(playerUUID)) {
+                event.setCancelled(true);
+            }
+        }
+    }
+    
+    // 玩家放置方块事件
+    @EventHandler
+    public void onPlayerBlockPlace(BlockPlaceEvent event) {
+        Player player = event.getPlayer();
+        UUID playerUUID = player.getUniqueId();
+        // 检查是否未绑定邮箱
+        if (unbindedPlayers.containsKey(playerUUID)) {
+            event.setCancelled(true);
+        }
+    }
+    
+    // 玩家破坏方块事件
+    @EventHandler
+    public void onPlayerBlockBreak(BlockBreakEvent event) {
+        Player player = event.getPlayer();
+        UUID playerUUID = player.getUniqueId();
+        // 检查是否未绑定邮箱
+        if (unbindedPlayers.containsKey(playerUUID)) {
+            event.setCancelled(true);
+        }
+    }
+    
+    // 玩家点击库存事件（处理菜单中的点击）
+    @EventHandler
+    public void onInventoryClick(InventoryClickEvent event) {
+        if (event.getWhoClicked() instanceof Player) {
+            Player player = (Player) event.getWhoClicked();
+            UUID playerUUID = player.getUniqueId();
+            // 检查是否未绑定邮箱
+            if (unbindedPlayers.containsKey(playerUUID)) {
+                // 取消所有库存点击事件（包括菜单中的操作）
+                event.setCancelled(true);
+                new BukkitRunnable() {
+                    @Override
+                    public void run() {
+                        player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                        player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §c★ 请先绑定邮箱再使用菜单呢！ ★");
+                        player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §e★ 在聊天框输入您的邮箱地址 ★");
+                        player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §6★ 完成绑定后即可正常使用菜单喵～ ★");
+                        player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                    }
+                }.runTask(EmailBind.this);
+            }
+        }
+    }
+    
+    // 玩家打开库存事件（处理打开容器等）
+    @EventHandler
+    public void onInventoryOpen(InventoryOpenEvent event) {
+        if (event.getPlayer() instanceof Player) {
+            Player player = (Player) event.getPlayer();
+            UUID playerUUID = player.getUniqueId();
+            // 检查是否未绑定邮箱
+            if (unbindedPlayers.containsKey(playerUUID)) {
+                // 取消打开库存事件（包括箱子、熔炉等）
+                event.setCancelled(true);
+                new BukkitRunnable() {
+                    @Override
+                    public void run() {
+                        player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                        player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §c★ 请先绑定邮箱再打开容器呢！ ★");
+                        player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §e★ 在聊天框输入您的邮箱地址 ★");
+                        player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §6★ 完成绑定后即可正常使用容器喵～ ★");
+                        player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                    }
+                }.runTask(EmailBind.this);
+            }
+        }
+    }
+    
+    // 玩家与实体交互事件（处理与村民、物品展示框等交互）
+    @EventHandler
+    public void onPlayerInteractEntity(PlayerInteractEntityEvent event) {
+        Player player = event.getPlayer();
+        UUID playerUUID = player.getUniqueId();
+        // 检查是否未绑定邮箱
+        if (unbindedPlayers.containsKey(playerUUID)) {
+            // 取消与实体的交互
+            event.setCancelled(true);
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §c★ 请先绑定邮箱再与实体交互呢！ ★");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §e★ 在聊天框输入您的邮箱地址 ★");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §6★ 完成绑定后即可正常交互喵～ ★");
+                    player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                }
+            }.runTask(EmailBind.this);
+        }
+    }
+    
+    // 玩家消耗物品事件（处理吃食物、喝药水等）
+    @EventHandler
+    public void onPlayerItemConsume(PlayerItemConsumeEvent event) {
+        Player player = event.getPlayer();
+        UUID playerUUID = player.getUniqueId();
+        // 检查是否未绑定邮箱
+        if (unbindedPlayers.containsKey(playerUUID)) {
+            // 取消消耗物品
+            event.setCancelled(true);
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §c★ 请先绑定邮箱再使用物品呢！ ★");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §e★ 在聊天框输入您的邮箱地址 ★");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §6★ 完成绑定后即可正常使用物品喵～ ★");
+                    player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                }
+            }.runTask(EmailBind.this);
+        }
+    }
+    
+    // 玩家钓鱼事件
+    @EventHandler
+    public void onPlayerFish(PlayerFishEvent event) {
+        Player player = event.getPlayer();
+        UUID playerUUID = player.getUniqueId();
+        // 检查是否未绑定邮箱
+        if (unbindedPlayers.containsKey(playerUUID)) {
+            // 取消钓鱼
+            event.setCancelled(true);
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §c★ 请先绑定邮箱再钓鱼呢！ ★");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §e★ 在聊天框输入您的邮箱地址 ★");
+                    player.sendMessage(ChatColor.RED + "§l§o[猫娘提醒] §6★ 完成绑定后即可正常钓鱼喵～ ★");
+                    player.sendMessage(ChatColor.RED + "§l----------------------------------------");
+                }
+            }.runTask(EmailBind.this);
+        }
+    }
+    
+    // 玩家邮箱验证事件
+
+    @EventHandler
+
+    public void onPlayerEmailVerification(AsyncPlayerChatEvent event) {
         Player player = event.getPlayer();
         UUID playerUUID = player.getUniqueId();
         String message = event.getMessage();
@@ -586,7 +789,7 @@ public final class EmailBind extends JavaPlugin implements Listener {
                     
                     // 替换模板中的占位符
                     htmlContent = htmlContent.replace("%playername%", "玩家");
-                    htmlContent = htmlContent.replace("%servername%", "喵之国度");
+                    htmlContent = htmlContent.replace("%servername%", "梦幻次元");
                     htmlContent = htmlContent.replace("%generatedcode%", code);
                     htmlContent = htmlContent.replace("%minutesvalid%", "10");
                     
