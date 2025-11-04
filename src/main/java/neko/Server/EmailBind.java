@@ -29,6 +29,9 @@ public final class EmailBind extends JavaPlugin implements Listener {
     private String username;
     private String password;
     private String table;
+    // 数据库SSL配置
+    private boolean databaseSSL;
+    private String databaseSSLMode;
     
     // SMTP配置信息
     private String smtpHost;
@@ -134,6 +137,8 @@ public final class EmailBind extends JavaPlugin implements Listener {
         username = getConfig().getString("database.username", username);
         password = getConfig().getString("database.password", password);
         table = getConfig().getString("database.table", table);
+        databaseSSL = getConfig().getBoolean("database.ssl", databaseSSL);
+        databaseSSLMode = getConfig().getString("database.ssl-mode", databaseSSLMode);
         
         smtpHost = getConfig().getString("smtp.host", smtpHost);
         smtpPort = getConfig().getInt("smtp.port", smtpPort);
@@ -221,7 +226,8 @@ public final class EmailBind extends JavaPlugin implements Listener {
             public void run() {
                 try {
                     Connection connection = DriverManager.getConnection(
-                        "jdbc:mysql://" + host + ":" + port + "/" + database, 
+                        "jdbc:mysql://" + host + ":" + port + "/" + database + 
+                        "?useSSL=" + databaseSSL + "&sslMode=" + databaseSSLMode, 
                         username, 
                         password
                     );
@@ -484,7 +490,8 @@ public final class EmailBind extends JavaPlugin implements Listener {
     private boolean isEmailAlreadyUsed(String email, String playerName) {
         try {
             Connection connection = DriverManager.getConnection(
-                "jdbc:mysql://" + host + ":" + port + "/" + database, 
+                "jdbc:mysql://" + host + ":" + port + "/" + database + 
+                "?useSSL=" + databaseSSL + "&sslMode=" + databaseSSLMode, 
                 username, 
                 password
             );
